@@ -52,8 +52,11 @@ function encrypt(plaintext) {
 // look like the same thing. Falls back to no mark if the source doesn't set one.
 function faviconOf(html) {
   const m = html.match(/<link[^>]+rel=["']icon["'][^>]*>/i);
-  const h = m && m[0].match(/href=["']([^"']+)["']/i);
-  return h ? h[1] : null;
+  // Match the opening quote and close on the SAME one: these are data: URIs full of inline
+  // SVG, so a double-quoted href routinely contains single quotes (and vice versa). A
+  // ["'] character class on both ends truncates at the first inner quote.
+  const h = m && m[0].match(/href=("|')([\s\S]*?)\1/i);
+  return h ? h[2] : null;
 }
 
 const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
