@@ -1,4 +1,4 @@
-# deli-counter
+# hans-kissle-provocations
 
 Public hosting for a small set of self-contained, illustrative web demos — vanilla HTML/JS,
 no build step to *run* them, no network calls, fully offline once open.
@@ -7,7 +7,7 @@ no build step to *run* them, no network calls, fully offline once open.
 
 Every published page here contains **only AES-256-GCM ciphertext** plus a tiny in-browser
 decryptor (Web Crypto, no libraries). Entering the correct password derives the key
-(PBKDF2-SHA256, 200,000 iterations) and decrypts the page in the browser. Without the
+(PBKDF2-SHA256, 600,000 iterations) and decrypts the page in the browser. Without the
 password the pages hold no readable content — only the lock screen you can see in the source.
 
 Pages in a single build share one salt, so unlocking any one of them caches the *derived key*

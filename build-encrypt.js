@@ -15,7 +15,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 
-const ITER = 200000;
+const ITER = 600000;
 const MANIFEST = process.argv[2];
 const PW = process.env.SITE_PW;
 if (!MANIFEST || !PW) {
