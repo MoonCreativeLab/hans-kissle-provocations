@@ -6,8 +6,14 @@
 //   usage:  SITE_PW='<password>' node build-encrypt.js <manifest.json> [outDir]
 //
 // Every page in a build shares one salt, so unlocking any one of them caches a derived key
-// that unlocks the others for the rest of the tab (sessionStorage — gone when the tab closes,
-// and invalidated automatically by the next build, which draws a new salt).
+// that unlocks the others. The cache is a cookie scoped to the build's own directory, so the
+// browser stays unlocked for REMEMBER_DAYS across tabs and restarts; sessionStorage is the
+// fallback when cookies are refused. Either way the next build draws a new salt, which
+// renames the cache entry and invalidates every key in the wild.
+//
+// Tradeoff worth knowing: a cookie rides along on every request to the host, so the derived
+// key reaches the static host's logs (over TLS). Path-scoping keeps it off unrelated paths.
+// Swap the cookie for localStorage if the key must never leave the browser.
 //
 // The manifest and the plaintext sources live in the private source repo. This file carries
 // no content of its own, which is why it is safe to publish alongside the ciphertext.
@@ -16,6 +22,7 @@ const path = require('path');
 const crypto = require('crypto');
 
 const ITER = 600000;
+const REMEMBER_DAYS = 30;          // how long an unlocked browser stays unlocked
 const MANIFEST = process.argv[2];
 const PW = process.env.SITE_PW;
 if (!MANIFEST || !PW) {
@@ -62,7 +69,7 @@ function faviconOf(html) {
 const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
   .replace(/"/g, '&quot;');
 
-function gatePage({ title, heading, hint, icon, enc }) {
+function gatePage({ title, heading, hint, icon, enc, depth }) {
   return `<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -102,8 +109,32 @@ ${icon ? `<link rel="icon" href="${esc(icon)}">` : ''}
 </div>
 <script>
 const ENC=${JSON.stringify(enc)};
+const DEPTH=${depth}, DAYS=${REMEMBER_DAYS};
 const SK='gate:'+ENC.salt;                       // new salt each build => stale keys ignored
 const b64d=s=>Uint8Array.from(atob(s),c=>c.charCodeAt(0));
+// base64url, so both the cookie name and its value stay inside RFC 6265's allowed octets
+// (plain base64 carries '/' and '=', which a cookie name may not hold at all).
+// (double backslashes: this is inside a template literal, which eats a lone \\ before + or /)
+const b64u=s=>s.replace(/\\+/g,'-').replace(/\\//g,'_').replace(/=+$/,'');
+const unb64u=s=>{s=s.replace(/-/g,'+').replace(/_/g,'/'); return s+'==='.slice((s.length+3)%4);};
+const CK='gate_'+b64u(ENC.salt);                 // [A-Za-z0-9_-] only — safe unescaped below
+
+// Scope the cookie to the build's own root, so it is not sent with requests to anything
+// else on the host. DEPTH is how many directories below that root this page sits.
+function cookiePath(){
+  const parts=location.pathname.split('/');
+  parts.pop();                                   // the filename, or the '' of a directory URL
+  for(let i=0;i<DEPTH;i++) parts.pop();
+  return parts.join('/')+'/';
+}
+function readCookie(){
+  const m=document.cookie.match(new RegExp('(?:^|; )'+CK+'=([^;]*)'));
+  return m ? m[1] : null;
+}
+function writeCookie(v){
+  document.cookie=CK+'='+v+'; Path='+cookiePath()+'; Max-Age='+(v?DAYS*86400:0)
+    +'; SameSite=Lax'+(location.protocol==='https:'?'; Secure':'');
+}
 const card=document.getElementById('card'), pw=document.getElementById('pw'),
       go=document.getElementById('go'), err=document.getElementById('err');
 
@@ -126,7 +157,9 @@ async function reveal(key){
   // Cache the derived key (not the password) before we tear this document down.
   try{
     const raw=new Uint8Array(await crypto.subtle.exportKey('raw', key));
-    sessionStorage.setItem(SK, btoa(String.fromCharCode.apply(null, raw)));
+    const enc=btoa(String.fromCharCode.apply(null, raw));
+    writeCookie(b64u(enc));
+    if(!readCookie()) sessionStorage.setItem(SK, enc);   // cookies refused — tab-only fallback
   }catch(e){}
   await afterLoad();
   document.open(); document.write(html); document.close();
@@ -144,11 +177,12 @@ pw.addEventListener('keydown', e=>{ if(e.key==='Enter') submit(); });
   if(!(window.crypto && crypto.subtle)){
     return show('This page needs a secure context — open it over https:// or localhost.');
   }
-  const cached=sessionStorage.getItem(SK);          // already unlocked in this tab?
+  const ck=readCookie();                            // this browser remembered?
+  const cached=ck ? unb64u(ck) : sessionStorage.getItem(SK);
   if(!cached) return show();
   try{
     await reveal(await crypto.subtle.importKey('raw', b64d(cached), {name:'AES-GCM', length:256}, true, ['decrypt']));
-  }catch(e){ sessionStorage.removeItem(SK); await afterLoad(); show(); }
+  }catch(e){ writeCookie(''); sessionStorage.removeItem(SK); await afterLoad(); show(); }
 })();
 </script>
 `;
@@ -165,6 +199,7 @@ for (const page of manifest.pages) {
     hint: page.hint || 'Enter the password to view.',
     icon: page.icon || faviconOf(plaintext),
     enc: encrypt(plaintext),
+    depth: page.out.split('/').length - 1,
   });
   fs.mkdirSync(path.dirname(outPath), { recursive: true });
   fs.writeFileSync(outPath, html);
@@ -172,5 +207,5 @@ for (const page of manifest.pages) {
   console.log('  %s  %s -> %s (%dk plaintext, %dk page)',
     'ok', page.src, page.out, Math.round(plaintext.length / 1024), Math.round(html.length / 1024));
 }
-console.log('built %d page(s), %dk total, %d PBKDF2 iterations, salt %s',
-  manifest.pages.length, Math.round(total / 1024), ITER, b64(salt));
+console.log('built %d page(s), %dk total, %d PBKDF2 iterations, %d-day cookie, salt %s',
+  manifest.pages.length, Math.round(total / 1024), ITER, REMEMBER_DAYS, b64(salt));
