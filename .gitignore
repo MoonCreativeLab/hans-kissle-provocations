@@ -1,0 +1,7 @@
+# Plaintext source is intentionally NOT published to this public repo.
+# It lives in the private source repo and is copied here only as ciphertext.
+*.plaintext.html
+launcher.html
+source.html
+manifest.json
+.DS_Store
